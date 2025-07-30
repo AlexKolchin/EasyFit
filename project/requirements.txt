@@ -4,3 +4,7 @@ httpx
 python-dotenv
 jinja2
 python-multipart
+asyncpg
+sqlalchemy
+databases
+alembic
