@@ -7,6 +7,15 @@ import httpx
 import os
 import json
 from dotenv import load_dotenv
+from datetime import date
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 # завантажуємо .env
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -28,9 +37,9 @@ CHAT_MODEL = "gpt-3.5-turbo"
 database = Database(DATABASE_URL)
 
 if not OPENAI_API_KEY:
-    print("❌ Помилка: змінна середовища OPENAI_API_KEY не встановлена. Перевір файл .env")
+    logger.info("❌ Помилка: змінна середовища OPENAI_API_KEY не встановлена. Перевір файл .env")
 else:
-    print("✅ OPENAI_API_KEY завантажено успішно")
+    logger.info("✅ OPENAI_API_KEY завантажено успішно")
 
 @app.get("/reports")
 async def get_reports():
@@ -50,20 +59,21 @@ async def get_reports():
 @app.on_event("startup")
 async def startup():
     await database.connect()
-    print("✅ Підключено до бази даних")
+    logger.info("✅ Підключено до бази даних")
 
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
-    print("❌ Відключено від бази даних")
+    logger.info("❌ Відключено від бази даних")
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def read_form(request: Request):
-    print("Запит на / отримано")  # Додай цей рядок
+    logger.info("Запит на / отримано")
     return templates.TemplateResponse("form.html", {"request": request})
 
 @app.post("/submit")
 async def submit_report(food: str = Form(...)):
+    logger.info(f"Отримано звіт для підрахунку КБЖВ: {food}")
     prompt = f"""
         Порахуй КБЖВ для такого звіту і виведи тільки підсумок у форматі JSON з полями:
         калорії, білки, жири, вуглеводи.
@@ -88,17 +98,50 @@ async def submit_report(food: str = Form(...)):
             result = response.json()
             reply = result["choices"][0]["message"]["content"]
 
+            logger.info("Отримано відповідь від OpenAI, розпарсено КБЖВ")
+
             reply_clean = reply.strip()
             try:
                 kbjv = json.loads(reply_clean)
+
+                # Дебаг: перевіряємо що отримали
+                logger.info("kbjv dict:", kbjv)
+
+                calories = kbjv.get("калорії") or 0
+                protein = kbjv.get("білки") or 0
+                fat = kbjv.get("жири") or 0
+                carbs = kbjv.get("вуглеводи") or 0
+
+                logger.info(f"calories: {calories}, protein: {protein}, fat: {fat}, carbs: {carbs}")
+
+                await database.execute(
+                    """
+                    INSERT INTO reports (
+                        username, report_date, report_type,
+                        report_text, kbjv_json,
+                        calories, protein, fat, carbs
+                    )
+                    VALUES (
+                        :username, :report_date, :report_type,
+                        :text, :kbjv,
+                        :calories, :protein, :fat, :carbs
+                    )
+                    """,
+                    values={
+                        "username": "demo_user",
+                        "report_date": date.today(),  # передаємо об'єкт date, а не рядок
+                        "report_type": "харчування",
+                        "text": food,
+                        "kbjv": json.dumps(kbjv),
+                        "calories": calories,
+                        "protein": protein,
+                        "fat": fat,
+                        "carbs": carbs
+                    }
+                )
+
             except json.JSONDecodeError:
                 return JSONResponse(content={"result": reply, "warning": "Не вдалося розпарсити JSON"})
-
-            # --- ПРИКЛАД: збереження результату у базу (опційно) ---
-            await database.execute(
-                 "INSERT INTO reports (report_text, kbjv_json) VALUES (:text, :kbjv)",
-                 values={"text": food, "kbjv": json.dumps(kbjv)}
-            )
 
             return JSONResponse(content={"КБЖВ": kbjv})
 
@@ -108,10 +151,9 @@ async def submit_report(food: str = Form(...)):
             "details": response.text
         })
     except Exception as e:
-        return JSONResponse(status_code=500, content={
-            "error": "Unexpected server error",
-            "details": str(e)
-        })
+        logger.error(f"Помилка при обробці: {e}")
+        raise
+
 
 @app.get("/health")
 async def health_check():
