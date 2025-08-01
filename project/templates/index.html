@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Звіт КБЖВ</title>
+    <style>
+        table {
+            border-collapse: collapse;
+            margin-top: 20px;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #aaa;
+            padding: 6px 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #eee;
+        }
+    </style>
+</head>
+<body>
+    <h1>Введіть звіт про харчування</h1>
+    <textarea id="reportText" rows="10" cols="50" placeholder="Введіть свій звіт тут..."></textarea>
+    <br />
+    <button onclick="analyzeReport()">Перевірити</button>
+    <button onclick="submitReport()">Надіслати звіт</button>
+
+    <h2>Результат перевірки:</h2>
+    <div id="result" style="white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; min-height: 80px;"></div>
+
+    <h2>Історія звітів за останні 3 дні:</h2>
+    <table id="historyTable">
+        <thead>
+            <tr>
+                <th>Дата</th>
+                <th>Звіт</th>
+                <th>Калорії</th>
+                <th>Білки (г)</th>
+                <th>Жири (г)</th>
+                <th>Вуглеводи (г)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td colspan="6">Завантаження...</td></tr>
+        </tbody>
+    </table>
+
+<script>
+    async function analyzeReport() {
+        const reportText = document.getElementById("reportText").value;
+        const resultDiv = document.getElementById("result");
+
+        if (!reportText.trim()) {
+            resultDiv.textContent = "Будь ласка, введіть звіт.";
+            return;
+        }
+
+        resultDiv.textContent = "Обробка...";
+
+        try {
+            const response = await fetch("/check_report", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ food: reportText })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
+                return;
+            }
+
+            const kbjvData = data.kbjv;
+
+            if (kbjvData && kbjvData.body) {
+                try {
+                    const parsedBody = JSON.parse(kbjvData.body);
+                    const kbjv = parsedBody["КБЖВ"];
+
+                    if (kbjv) {
+                        resultDiv.innerHTML = `
+                            ✅ Калорії: ${kbjv.калорії}<br>
+                            Білки: ${kbjv.білки} г<br>
+                            Жири: ${kbjv.жири} г<br>
+                            Вуглеводи: ${kbjv.вуглеводи} г
+                        `;
+                    } else {
+                        resultDiv.textContent = "Не знайдено даних КБЖВ у відповіді.";
+                    }
+                } catch (err) {
+                    console.error("Помилка розбору JSON:", err);
+                    resultDiv.textContent = "Не вдалося розпарсити відповідь сервера.";
+                }
+            } else {
+                resultDiv.textContent = "Дані КБЖВ відсутні у відповіді сервера.";
+            }
+        } catch (err) {
+            console.error("Помилка запиту:", err);
+            resultDiv.textContent = "Помилка під час запиту до сервера.";
+        }
+    }
+
+    async function submitReport() {
+        const reportText = document.getElementById("reportText").value;
+        const resultDiv = document.getElementById("result");
+
+        if (!reportText.trim()) {
+            resultDiv.textContent = "Будь ласка, введіть звіт.";
+            return;
+        }
+
+        resultDiv.textContent = "Відправка звіту...";
+
+        try {
+            const formData = new FormData();
+            formData.append("food", reportText);
+
+            const response = await fetch("/submit", {
+                method: "POST",
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
+                return;
+            }
+
+            if (data.КБЖВ) {
+                resultDiv.innerHTML = `
+                    ✅ Звіт надіслано.<br>
+                    Калорії: ${data.КБЖВ.калорії}<br>
+                    Білки: ${data.КБЖВ.білки} г<br>
+                    Жири: ${data.КБЖВ.жири} г<br>
+                    Вуглеводи: ${data.КБЖВ.вуглеводи} г
+                `;
+                loadReports();
+            } else {
+                resultDiv.textContent = "Звіт надіслано, але відсутні дані КБЖВ.";
+            }
+        } catch (err) {
+            console.error("Помилка відправки звіту:", err);
+            resultDiv.textContent = "Помилка при відправці звіту на сервер.";
+        }
+    }
+
+    async function loadReports() {
+        const tbody = document.querySelector("#historyTable tbody");
+        tbody.innerHTML = '<tr><td colspan="6">Завантаження...</td></tr>';
+
+        try {
+            const response = await fetch("/reports");
+            if (!response.ok) {
+                tbody.innerHTML = `<tr><td colspan="6">Помилка завантаження історії: ${response.statusText}</td></tr>`;
+                return;
+            }
+
+            const data = await response.json();
+            const reports = data.reports || [];
+
+            const today = new Date();
+            const threeDaysAgo = new Date(today);
+            threeDaysAgo.setDate(today.getDate() - 3);
+
+            const filtered = reports.filter(r => {
+                const d = new Date(r.created_at);
+                return d >= threeDaysAgo && d <= today;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6">Історія за останні 3 дні відсутня.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = '';
+            filtered.forEach(r => {
+                let kbjv = {};
+                try {
+                    kbjv = typeof r.kbjv === 'string' ? JSON.parse(r.kbjv) : r.kbjv || {};
+                } catch (err) {
+                    console.warn("Не вдалося розпарсити kbjv_json:", err);
+                    kbjv = {};
+                }
+
+                tbody.innerHTML += `
+                    <tr>
+                        <td>${new Date(r.created_at).toLocaleString()}</td>
+                        <td>${r.report_text.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</td>
+                        <td>${kbjv.калорії ?? kbjv.calories ?? ''}</td>
+                        <td>${kbjv.білки ?? kbjv.protein ?? ''}</td>
+                        <td>${kbjv.жири ?? kbjv.fat ?? ''}</td>
+                        <td>${kbjv.вуглеводи ?? kbjv.carbs ?? ''}</td>
+                    </tr>
+                `;
+            });
+
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="6">Помилка при завантаженні історії: ${err.message}</td></tr>`;
+        }
+    }
+
+    window.onload = loadReports;
+</script>
+</body>
+</html>

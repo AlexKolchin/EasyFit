@@ -7,15 +7,8 @@ import httpx
 import os
 import json
 from dotenv import load_dotenv
-from datetime import date
+from datetime import date, datetime, timedelta
 import logging
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-
-logger = logging.getLogger(__name__)
 
 # завантажуємо .env
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -26,9 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(BASE_DIR, "static")
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
-
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -36,49 +27,61 @@ CHAT_MODEL = "gpt-3.5-turbo"
 
 database = Database(DATABASE_URL)
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 if not OPENAI_API_KEY:
-    logger.info("❌ Помилка: змінна середовища OPENAI_API_KEY не встановлена. Перевір файл .env")
+    logger.error("❌ Помилка: змінна середовища OPENAI_API_KEY не встановлена. Перевір файл .env")
 else:
     logger.info("✅ OPENAI_API_KEY завантажено успішно")
-
-@app.get("/reports")
-async def get_reports():
-    query = "SELECT id, report_text, kbjv_json, created_at FROM reports ORDER BY created_at DESC"
-    rows = await database.fetch_all(query)
-    reports = [
-        {
-            "id": row["id"],
-            "report_text": row["report_text"],
-            "kbjv": row["kbjv_json"],
-            "created_at": row["created_at"].isoformat()
-        }
-        for row in rows
-    ]
-    return {"reports": reports}
 
 @app.on_event("startup")
 async def startup():
     await database.connect()
-    logger.info("✅ Підключено до бази даних")
+    logger.info(f"✅ Підключено до бази даних {DATABASE_URL}")
 
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
     logger.info("❌ Відключено від бази даних")
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def read_form(request: Request):
     logger.info("Запит на / отримано")
-    return templates.TemplateResponse("form.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/submit")
-async def submit_report(food: str = Form(...)):
-    logger.info(f"Отримано звіт для підрахунку КБЖВ: {food}")
+@app.get("/reports")
+async def get_reports():
+    three_days_ago = datetime.utcnow() - timedelta(days=3)
+    query = """
+        SELECT id, report_text, kbjv_json, created_at 
+        FROM reports 
+        WHERE created_at >= :date_from
+        ORDER BY created_at DESC
+    """
+    rows = await database.fetch_all(query=query, values={"date_from": three_days_ago})
+    reports = []
+    for row in rows:
+        # kbjv_json зберігається як JSON-рядок, парсимо в словник
+        try:
+            kbjv = json.loads(row["kbjv_json"]) if row["kbjv_json"] else {}
+        except Exception:
+            kbjv = {}
+        reports.append({
+            "id": row["id"],
+            "report_text": row["report_text"],
+            "kbjv": kbjv,
+            "created_at": row["created_at"].isoformat()
+        })
+    return {"reports": reports}
+
+async def query_openai_kbjv(report_text: str):
     prompt = f"""
         Порахуй КБЖВ для такого звіту і виведи тільки підсумок у форматі JSON з полями:
-        калорії, білки, жири, вуглеводи.
+        калорії, білки, жири, вуглеводи. Якщо є молочні продукти то беремо знежирені.
+        Всі страви готувались без олії. Брати всі продукти в сирому вигляді.
         Ось звіт:
-    {food}
+    {report_text}
     """
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -91,69 +94,90 @@ async def submit_report(food: str = Form(...)):
         ]
     }
 
+    async with httpx.AsyncClient() as client:
+        response = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        reply = result["choices"][0]["message"]["content"].strip()
+        return reply
+
+@app.post("/check_report")
+async def check_report(payload: dict):
+    report_text = payload.get("food")
+    if not report_text:
+        return JSONResponse(status_code=400, content={"error": "Параметр 'food' обов'язковий"})
+
+    logger.info(f"Отримано звіт для перевірки КБЖВ: {report_text}")
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
-            response.raise_for_status()
-            result = response.json()
-            reply = result["choices"][0]["message"]["content"]
+        reply = await query_openai_kbjv(report_text)
+        kbjv = json.loads(reply)
+        logger.info(f"Отримано КБЖВ: {kbjv}")
 
-            logger.info("Отримано відповідь від OpenAI, розпарсено КБЖВ")
-
-            reply_clean = reply.strip()
-            try:
-                kbjv = json.loads(reply_clean)
-
-                # Дебаг: перевіряємо що отримали
-                logger.info("kbjv dict:", kbjv)
-
-                calories = kbjv.get("калорії") or 0
-                protein = kbjv.get("білки") or 0
-                fat = kbjv.get("жири") or 0
-                carbs = kbjv.get("вуглеводи") or 0
-
-                logger.info(f"calories: {calories}, protein: {protein}, fat: {fat}, carbs: {carbs}")
-
-                await database.execute(
-                    """
-                    INSERT INTO reports (
-                        username, report_date, report_type,
-                        report_text, kbjv_json,
-                        calories, protein, fat, carbs
-                    )
-                    VALUES (
-                        :username, :report_date, :report_type,
-                        :text, :kbjv,
-                        :calories, :protein, :fat, :carbs
-                    )
-                    """,
-                    values={
-                        "username": "demo_user",
-                        "report_date": date.today(),  # передаємо об'єкт date, а не рядок
-                        "report_type": "харчування",
-                        "text": food,
-                        "kbjv": json.dumps(kbjv),
-                        "calories": calories,
-                        "protein": protein,
-                        "fat": fat,
-                        "carbs": carbs
-                    }
-                )
-
-            except json.JSONDecodeError:
-                return JSONResponse(content={"result": reply, "warning": "Не вдалося розпарсити JSON"})
-
-            return JSONResponse(content={"КБЖВ": kbjv})
-
+        # Обгортаємо в структуру, як в твоєму фронтенді
+        return {"kbjv": {"status_code": 200, "body": json.dumps({"КБЖВ": kbjv}, ensure_ascii=False)}}
+    except json.JSONDecodeError:
+        logger.error("Не вдалося розпарсити JSON з відповіді OpenAI")
+        return JSONResponse(status_code=500, content={"error": "Не вдалося розпарсити JSON з відповіді OpenAI"})
     except httpx.HTTPStatusError as http_err:
-        return JSONResponse(status_code=response.status_code, content={
-            "error": "API response error",
-            "details": response.text
-        })
+        logger.error(f"Помилка API OpenAI: {http_err.response.text}")
+        return JSONResponse(status_code=http_err.response.status_code, content={"error": "API response error", "details": http_err.response.text})
     except Exception as e:
-        logger.error(f"Помилка при обробці: {e}")
-        raise
+        logger.error(f"Несподівана помилка: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": "Unexpected server error", "details": str(e)})
 
+@app.post("/submit")
+async def submit_report(food: str = Form(...)):
+    logger.info(f"Отримано звіт для збереження: {food}")
+
+    try:
+        reply = await query_openai_kbjv(food)
+        kbjv = json.loads(reply)
+
+        calories = kbjv.get("калорії")
+        protein = kbjv.get("білки")
+        fat = kbjv.get("жири")
+        carbs = kbjv.get("вуглеводи")
+
+        await database.execute(
+            """
+            INSERT INTO reports (
+                username, report_date, report_type,
+                report_text, kbjv_json,
+                calories, protein, fat, carbs
+            )
+            VALUES (
+                :username, :report_date, :report_type,
+                :text, :kbjv,
+                :calories, :protein, :fat, :carbs
+            )
+            """,
+            values={
+                "username": "demo_user",  # фіксовано, можеш замінити на реального юзера
+                "report_date": date.today(),
+                "report_type": "харчування",
+                "text": food,
+                "kbjv": json.dumps(kbjv, ensure_ascii=False),
+                "calories": calories,
+                "protein": protein,
+                "fat": fat,
+                "carbs": carbs
+            }
+        )
+
+        logger.info(f"Звіт збережено з КБЖВ: {kbjv}")
+
+        return JSONResponse(content={"КБЖВ": kbjv})
+
+    except json.JSONDecodeError:
+        logger.error("Не вдалося розпарсити JSON з відповіді OpenAI")
+        return JSONResponse(content={"result": reply, "warning": "Не вдалося розпарсити JSON"})
+    except httpx.HTTPStatusError as http_err:
+        logger.error(f"Помилка API OpenAI: {http_err.response.text}")
+        return JSONResponse(status_code=http_err.response.status_code, content={"error": "API response error", "details": http_err.response.text})
+    except Exception as e:
+        logger.error(f"Несподівана помилка: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": "Unexpected server error", "details": str(e)})
 
 @app.get("/health")
 async def health_check():
