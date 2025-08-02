@@ -102,8 +102,8 @@ async def query_openai_kbjv(report_text: str):
         return reply
 
 @app.post("/check_report")
-async def check_report(payload: dict):
-    report_text = payload.get("food")
+async def check_report(food: str = Form(...)):
+    report_text = food
     if not report_text:
         return JSONResponse(status_code=400, content={"error": "Параметр 'food' обов'язковий"})
 
@@ -170,19 +170,4 @@ async def submit_report(food: str = Form(...)):
         return JSONResponse(content={"КБЖВ": kbjv})
 
     except json.JSONDecodeError:
-        logger.error("Не вдалося розпарсити JSON з відповіді OpenAI")
-        return JSONResponse(content={"result": reply, "warning": "Не вдалося розпарсити JSON"})
-    except httpx.HTTPStatusError as http_err:
-        logger.error(f"Помилка API OpenAI: {http_err.response.text}")
-        return JSONResponse(status_code=http_err.response.status_code, content={"error": "API response error", "details": http_err.response.text})
-    except Exception as e:
-        logger.error(f"Несподівана помилка: {str(e)}")
-        return JSONResponse(status_code=500, content={"error": "Unexpected server error", "details": str(e)})
-
-@app.get("/health")
-async def health_check():
-    try:
-        result = await database.fetch_val("SELECT 1")
-        return {"database_connection": "ok" if result == 1 else "error"}
-    except Exception as e:
-        return {"database_connection": "error", "details": str(e)}
+        log

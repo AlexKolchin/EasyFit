@@ -1,209 +1,204 @@
 <!DOCTYPE html>
 <html lang="uk">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Звіт КБЖВ</title>
-    <style>
-        table {
-            border-collapse: collapse;
-            margin-top: 20px;
-            width: 100%;
-        }
-        th, td {
-            border: 1px solid #aaa;
-            padding: 6px 10px;
-            text-align: left;
-        }
-        th {
-            background-color: #eee;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>КБЖВ звіти</title>
+  <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-    <h1>Введіть звіт про харчування</h1>
-    <textarea id="reportText" rows="10" cols="50" placeholder="Введіть свій звіт тут..."></textarea>
-    <br />
-    <button onclick="analyzeReport()">Перевірити</button>
-    <button onclick="submitReport()">Надіслати звіт</button>
+<body class="bg-gray-100 text-gray-800 px-4 py-6">
 
-    <h2>Результат перевірки:</h2>
-    <div id="result" style="white-space: pre-wrap; border: 1px solid #ccc; padding: 10px; min-height: 80px;"></div>
+  <div class="max-w-3xl mx-auto bg-white p-6 rounded-2xl shadow-md">
+    <h1 class="text-2xl font-bold mb-4">Звіт по КБЖВ</h1>
 
-    <h2>Історія звітів за останні 3 дні:</h2>
-    <table id="historyTable">
-        <thead>
-            <tr>
-                <th>Дата</th>
-                <th>Звіт</th>
-                <th>Калорії</th>
-                <th>Білки (г)</th>
-                <th>Жири (г)</th>
-                <th>Вуглеводи (г)</th>
-            </tr>
+    <textarea id="reportText" rows="5" class="w-full border rounded-lg p-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="Введіть ваш звіт (наприклад: День 267 - Лаваш(60), яйця(3),...)"></textarea>
+
+    <div class="flex gap-4 mb-4">
+      <button onclick="checkKbjv()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-all">Перевірити</button>
+      <button onclick="submitReport()" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded transition-all">Надіслати</button>
+    </div>
+
+    <div id="result" class="text-sm text-gray-700 mb-6"></div>
+
+    <h2 class="text-xl font-semibold">Історія звітів</h2>
+    <button id="toggleHistoryBtn" class="mt-2 mb-4 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-all">
+      Показати історію
+    </button>
+
+    <div id="historyContainer" class="max-h-0 overflow-hidden transition-[max-height] duration-500 ease-in-out">
+      <table class="w-full table-auto border border-collapse border-gray-300 text-sm">
+        <thead class="bg-gray-100">
+          <tr>
+            <th class="border px-2 py-1">Дата</th>
+            <th class="border px-2 py-1">Звіт</th>
+            <th class="border px-2 py-1">Калорії</th>
+            <th class="border px-2 py-1">Білки</th>
+            <th class="border px-2 py-1">Жири</th>
+            <th class="border px-2 py-1">Вуглеводи</th>
+          </tr>
         </thead>
-        <tbody>
-            <tr><td colspan="6">Завантаження...</td></tr>
+        <tbody id="historyBody">
+          <tr><td colspan="6" class="text-center p-4">Історія порожня...</td></tr>
         </tbody>
-    </table>
+      </table>
+    </div>
+  </div>
 
-<script>
-    async function analyzeReport() {
-        const reportText = document.getElementById("reportText").value;
-        const resultDiv = document.getElementById("result");
+  <script>
+    document.getElementById("toggleHistoryBtn").addEventListener("click", () => {
+      const historyContainer = document.getElementById("historyContainer");
+      const isCollapsed = historyContainer.classList.contains("max-h-0");
 
-        if (!reportText.trim()) {
-            resultDiv.textContent = "Будь ласка, введіть звіт.";
-            return;
+      if (isCollapsed) {
+        historyContainer.classList.remove("max-h-0");
+        historyContainer.classList.add("max-h-[1000px]");
+        document.getElementById("toggleHistoryBtn").textContent = "Сховати історію";
+      } else {
+        historyContainer.classList.remove("max-h-[1000px]");
+        historyContainer.classList.add("max-h-0");
+        document.getElementById("toggleHistoryBtn").textContent = "Показати історію";
+      }
+    });
+
+    async function checkKbjv() {
+      const reportText = document.getElementById("reportText").value;
+      const resultDiv = document.getElementById("result");
+
+      if (!reportText.trim()) {
+        resultDiv.textContent = "Будь ласка, введіть звіт.";
+        return;
+      }
+
+      try {
+        const formData = new FormData();
+        formData.append("food", reportText);
+
+        const response = await fetch("/check_report", {
+          method: "POST",
+          body: formData
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
+        } else if (data.kbjv && data.kbjv.body) {
+          // Парсимо формат з бекенду
+          const parsedBody = JSON.parse(data.kbjv.body);
+          const kbjv = parsedBody["КБЖВ"];
+
+          if(kbjv){
+            resultDiv.innerHTML = `
+              Калорії: ${kbjv.калорії}<br>
+              Білки: ${kbjv.білки} г<br>
+              Жири: ${kbjv.жири} г<br>
+              Вуглеводи: ${kbjv.вуглеводи} г
+            `;
+          } else {
+            resultDiv.textContent = "Не вдалося отримати КБЖВ.";
+          }
+        } else {
+          resultDiv.textContent = "Не вдалося отримати КБЖВ.";
         }
-
-        resultDiv.textContent = "Обробка...";
-
-        try {
-            const response = await fetch("/check_report", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ food: reportText })
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
-                return;
-            }
-
-            const kbjvData = data.kbjv;
-
-            if (kbjvData && kbjvData.body) {
-                try {
-                    const parsedBody = JSON.parse(kbjvData.body);
-                    const kbjv = parsedBody["КБЖВ"];
-
-                    if (kbjv) {
-                        resultDiv.innerHTML = `
-                            ✅ Калорії: ${kbjv.калорії}<br>
-                            Білки: ${kbjv.білки} г<br>
-                            Жири: ${kbjv.жири} г<br>
-                            Вуглеводи: ${kbjv.вуглеводи} г
-                        `;
-                    } else {
-                        resultDiv.textContent = "Не знайдено даних КБЖВ у відповіді.";
-                    }
-                } catch (err) {
-                    console.error("Помилка розбору JSON:", err);
-                    resultDiv.textContent = "Не вдалося розпарсити відповідь сервера.";
-                }
-            } else {
-                resultDiv.textContent = "Дані КБЖВ відсутні у відповіді сервера.";
-            }
-        } catch (err) {
-            console.error("Помилка запиту:", err);
-            resultDiv.textContent = "Помилка під час запиту до сервера.";
-        }
+      } catch (err) {
+        console.error("Помилка перевірки:", err);
+        resultDiv.textContent = "Помилка при перевірці звіту.";
+      }
     }
 
     async function submitReport() {
-        const reportText = document.getElementById("reportText").value;
-        const resultDiv = document.getElementById("result");
+      const reportText = document.getElementById("reportText").value;
+      const resultDiv = document.getElementById("result");
+      const submitBtn = document.querySelector('button[onclick="submitReport()"]');
 
-        if (!reportText.trim()) {
-            resultDiv.textContent = "Будь ласка, введіть звіт.";
-            return;
+      if (!reportText.trim()) {
+        resultDiv.textContent = "Будь ласка, введіть звіт.";
+        return;
+      }
+
+      submitBtn.disabled = true;
+      const originalText = submitBtn.textContent;
+      submitBtn.textContent = "Зберігається...";
+
+      try {
+        const formData = new FormData();
+        formData.append("food", reportText);
+
+        const response = await fetch("/submit", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
+        } else if (data.КБЖВ) {
+          resultDiv.innerHTML = `
+            ✅ Звіт надіслано.<br>
+            Калорії: ${data.КБЖВ.калорії}<br>
+            Білки: ${data.КБЖВ.білки} г<br>
+            Жири: ${data.КБЖВ.жири} г<br>
+            Вуглеводи: ${data.КБЖВ.вуглеводи} г
+          `;
+        } else {
+          resultDiv.textContent = "Звіт надіслано, але відсутні дані КБЖВ.";
         }
 
-        resultDiv.textContent = "Відправка звіту...";
+        submitBtn.textContent = "Збережено ✅";
+        setTimeout(() => {
+          submitBtn.textContent = originalText;
+          submitBtn.disabled = false;
+        }, 1500);
 
-        try {
-            const formData = new FormData();
-            formData.append("food", reportText);
-
-            const response = await fetch("/submit", {
-                method: "POST",
-                body: formData
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                resultDiv.textContent = "Помилка сервера: " + (data.error || response.statusText);
-                return;
-            }
-
-            if (data.КБЖВ) {
-                resultDiv.innerHTML = `
-                    ✅ Звіт надіслано.<br>
-                    Калорії: ${data.КБЖВ.калорії}<br>
-                    Білки: ${data.КБЖВ.білки} г<br>
-                    Жири: ${data.КБЖВ.жири} г<br>
-                    Вуглеводи: ${data.КБЖВ.вуглеводи} г
-                `;
-                loadReports();
-            } else {
-                resultDiv.textContent = "Звіт надіслано, але відсутні дані КБЖВ.";
-            }
-        } catch (err) {
-            console.error("Помилка відправки звіту:", err);
-            resultDiv.textContent = "Помилка при відправці звіту на сервер.";
-        }
+        loadReports(); // Оновити історію
+      } catch (err) {
+        console.error("Помилка відправки звіту:", err);
+        resultDiv.textContent = "Помилка при відправці звіту на сервер.";
+        submitBtn.textContent = originalText;
+        submitBtn.disabled = false;
+      }
     }
 
     async function loadReports() {
-        const tbody = document.querySelector("#historyTable tbody");
-        tbody.innerHTML = '<tr><td colspan="6">Завантаження...</td></tr>';
-
-        try {
-            const response = await fetch("/reports");
-            if (!response.ok) {
-                tbody.innerHTML = `<tr><td colspan="6">Помилка завантаження історії: ${response.statusText}</td></tr>`;
-                return;
-            }
-
-            const data = await response.json();
-            const reports = data.reports || [];
-
-            const today = new Date();
-            const threeDaysAgo = new Date(today);
-            threeDaysAgo.setDate(today.getDate() - 3);
-
-            const filtered = reports.filter(r => {
-                const d = new Date(r.created_at);
-                return d >= threeDaysAgo && d <= today;
-            });
-
-            if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6">Історія за останні 3 дні відсутня.</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = '';
-            filtered.forEach(r => {
-                let kbjv = {};
-                try {
-                    kbjv = typeof r.kbjv === 'string' ? JSON.parse(r.kbjv) : r.kbjv || {};
-                } catch (err) {
-                    console.warn("Не вдалося розпарсити kbjv_json:", err);
-                    kbjv = {};
-                }
-
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${new Date(r.created_at).toLocaleString()}</td>
-                        <td>${r.report_text.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</td>
-                        <td>${kbjv.калорії ?? kbjv.calories ?? ''}</td>
-                        <td>${kbjv.білки ?? kbjv.protein ?? ''}</td>
-                        <td>${kbjv.жири ?? kbjv.fat ?? ''}</td>
-                        <td>${kbjv.вуглеводи ?? kbjv.carbs ?? ''}</td>
-                    </tr>
-                `;
-            });
-
-        } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="6">Помилка при завантаженні історії: ${err.message}</td></tr>`;
+      try {
+        const response = await fetch("/reports");
+        if (!response.ok) {
+          console.error("Помилка отримання історії:", response.statusText);
+          return;
         }
+        const data = await response.json();
+        const reports = data.reports || [];
+        const tbody = document.getElementById("historyBody");
+
+        if(reports.length === 0){
+          tbody.innerHTML = `<tr><td colspan="6" class="text-center p-4">Історія за останні 3 дні відсутня.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = "";
+
+        reports.reverse().forEach(r => {
+          const kbjv = r.kbjv || {};
+
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="border px-2 py-1">${new Date(r.created_at).toLocaleString()}</td>
+            <td class="border px-2 py-1">${r.report_text.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")}</td>
+            <td class="border px-2 py-1">${kbjv.калорії ?? ''}</td>
+            <td class="border px-2 py-1">${kbjv.білки ?? ''}</td>
+            <td class="border px-2 py-1">${kbjv.жири ?? ''}</td>
+            <td class="border px-2 py-1">${kbjv.вуглеводи ?? ''}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error("Помилка завантаження історії:", err);
+        const tbody = document.getElementById("historyBody");
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center p-4">Помилка завантаження історії.</td></tr>`;
+      }
     }
 
-    window.onload = loadReports;
-</script>
+    loadReports();
+  </script>
 </body>
 </html>
